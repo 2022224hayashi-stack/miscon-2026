@@ -1,13 +1,9 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
+import { Candidate } from '../app/type';
 
-interface Candidate {
-  id: number;
-  name: string;
-  school_year?: string;
-  img?: string;
-}
+const maxStorageAge = 60; // LocalStorage有効期間（秒）
 
 export default function VotePage() {
   const [candidates, setCandidates] = useState<Candidate[]>([]);
@@ -15,12 +11,15 @@ export default function VotePage() {
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState<boolean>(false);
-  const [showMenu, setShowMenu] = useState<boolean>(false); // メニュー開閉用の状態
-  const [adminClicks, setAdminClicks] = useState<Set<string>>(new Set()); // 管理者ページアクセス用クリック追跡
-  const [pressedKeys, setPressedKeys] = useState<Set<string>>(new Set()); // 押されているキーを追跡
+  const [showMenu, setShowMenu] = useState<boolean>(false);
+  const [isVotingOpen, setIsVotingOpen] = useState<boolean>(true); // 投票受付状態
+
+  // useRef を使って再レンダリング時も状態を保持し、useEffect の再実行を防ぐ
+  const pressedKeysRef = useRef<Set<string>>(new Set());
+  const adminClicksRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
-    // シークレットモード検出
+    // 1. シークレットモード検出
     const isIncognito = () => {
       try {
         const test = '__test__';
@@ -38,18 +37,19 @@ export default function VotePage() {
       return;
     }
 
-    // 右クリック禁止
+    // 2. 右クリック禁止
     const handleContextMenu = (e: MouseEvent) => e.preventDefault();
 
-    // データ取得
+    // 3. データ取得（候補者一覧 & 投票受付ステータス）
     fetch('/api/candidates')
       .then(async (res) => {
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || 'データ取得失敗');
-        return data as Candidate[];
+        return data;
       })
       .then((data) => {
-        setCandidates(data);
+        setCandidates(data.candidates || []);
+        setIsVotingOpen(data.isVotingOpen ?? true);
         setLoading(false);
       })
       .catch((err: unknown) => {
@@ -58,31 +58,27 @@ export default function VotePage() {
         setLoading(false);
       });
 
-    // 管理者ページアクセス用ロジック
+    // 4. 管理者ページアクセス用ロジック
     let clickTimer: NodeJS.Timeout | null = null;
 
     const handleAdminClick = (area: string) => {
-      // 必要なキーが押されているか確認
+      const pressedKeys = pressedKeysRef.current;
       if (!pressedKeys.has('a') || !pressedKeys.has('s') || !pressedKeys.has('d')) {
-        return; // キーが押されていなければ何もしない
+        return;
       }
 
-      const newClicks = new Set(adminClicks);
+      const newClicks = adminClicksRef.current;
       newClicks.add(area);
-      setAdminClicks(newClicks);
 
-      // タイマーをリセット
       if (clickTimer) clearTimeout(clickTimer);
 
-      // 3つ全てクリックされたかチェック
       if (newClicks.has('header') && newClicks.has('title') && newClicks.has('description')) {
         window.location.href = '/admin';
         return;
       }
 
-      // 15秒以内に全てクリックされなかったらリセット
       clickTimer = setTimeout(() => {
-        setAdminClicks(new Set());
+        adminClicksRef.current.clear();
       }, 15000);
     };
 
@@ -100,11 +96,8 @@ export default function VotePage() {
     const handleKeyDown = (e: KeyboardEvent) => {
       const key = e.key.toLowerCase();
 
-      // A, S, D キーの検出
       if (['a', 's', 'd'].includes(key)) {
-        const newKeys = new Set(pressedKeys);
-        newKeys.add(key);
-        setPressedKeys(newKeys);
+        pressedKeysRef.current.add(key);
       }
 
       // 開発者ツール防止
@@ -121,9 +114,7 @@ export default function VotePage() {
     const handleKeyUp = (e: KeyboardEvent) => {
       const key = e.key.toLowerCase();
       if (['a', 's', 'd'].includes(key)) {
-        const newKeys = new Set(pressedKeys);
-        newKeys.delete(key);
-        setPressedKeys(newKeys);
+        pressedKeysRef.current.delete(key);
       }
     };
 
@@ -139,24 +130,23 @@ export default function VotePage() {
       document.removeEventListener('click', handleGlobalClick);
       if (clickTimer) clearTimeout(clickTimer);
     };
-  }, [adminClicks, pressedKeys]);
+  }, []);
 
   const isAlreadyVoted = () => {
-    const hasCookie = document.cookie.split(';').some(c => c.trim().startsWith('has_voted_2026='));
-    
     const localStorageData = localStorage.getItem('has_voted_2026');
     let hasLocalStorage = false;
+    
     if (localStorageData) {
       try {
         const data = JSON.parse(localStorageData);
-        const oneHourInMs = 60 * 60 * 1000; // 1時間
-        hasLocalStorage = Date.now() - data.timestamp < oneHourInMs;
+        const timeoutInMs = maxStorageAge * 1000;
+        hasLocalStorage = Date.now() - data.timestamp < timeoutInMs;
       } catch {
         hasLocalStorage = false;
       }
     }
     
-    return hasCookie || hasLocalStorage;
+    return hasLocalStorage;
   };
 
   const handleVote = async () => {
@@ -177,9 +167,14 @@ export default function VotePage() {
       });
 
       const result = await res.json();
-      if (!res.ok) throw new Error(result.error || '投票処理に失敗しました。');
+      if (!res.ok) {
+        if(result.isVotingOpen === false){
+          setIsVotingOpen(false);
+          setSelected(null);
+        }
+        throw new Error(result.error || '投票処理に失敗しました。');
+      }
 
-      document.cookie = "has_voted_2026=true; max-age=31536000; path=/; SameSite=Lax";
       localStorage.setItem('has_voted_2026', JSON.stringify({ voted: true, timestamp: Date.now() }));
 
       const formattedId = String(selected.id).padStart(2, '0');
@@ -209,7 +204,6 @@ export default function VotePage() {
             </svg>
           </button>
 
-          {/* 三本線を押したときに表示されるメニュー */}
           {showMenu && (
             <div className="absolute top-10 right-0 bg-white border border-gray-200 shadow-xl rounded-xl p-2 z-50 w-44">
               <a
@@ -304,45 +298,44 @@ export default function VotePage() {
       </div>
       
       {selected && (
-      <div className="fixed bottom-0 left-0 w-full bg-black text-white px-5 pt-4 pb-5 shadow-2xl z-50">
-        <div className="max-w-md mx-auto">
-          <div className="flex justify-between items-end border-b border-gray-800 pb-3">
-            <div className="pr-2">
-              <div className="text-[10px] text-gray-400 tracking-wider font-medium">現在の選択中</div>
-              {selected ? (
+        <div className="fixed bottom-0 left-0 w-full bg-black text-white px-5 pt-4 pb-5 shadow-2xl z-50">
+          <div className="max-w-md mx-auto">
+            <div className="flex justify-between items-end border-b border-gray-800 pb-3">
+              <div className="pr-2">
+                <div className="text-[10px] text-gray-400 tracking-wider font-medium">現在の選択中</div>
                 <div className="text-lg font-bold mt-0.5 tracking-tight flex items-center gap-2">
                   <span className="text-2xl font-black">{String(selected.id).padStart(2, '0')}</span>
                   <span className="text-sm font-bold truncate max-w-[120px]">{selected.name}</span>
                 </div>
-              ) : null}
+              </div>
+
+              <button
+                disabled={submitting}
+                onClick={handleVote}
+                className="bg-white text-black px-6 py-3 rounded-md text-sm font-bold flex items-center gap-3 transition-all duration-150 active:scale-95 disabled:opacity-30 disabled:cursor-not-allowed shrink-0"
+              >
+                {submitting ? (
+                  <>
+                    <div className="inline-block animate-spin rounded-full h-4 w-4 border-2 border-black border-t-transparent"></div>
+                    <span>送信中...</span>
+                  </>
+                ) : (
+                  <>
+                    <span>投票する</span>
+                    <svg className="w-4 h-4 stroke-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M14 5l7 7m0 0l-7 7m7-7H3"/>
+                    </svg>
+                  </>
+                )}
+              </button>
             </div>
 
-            <button
-              disabled={!selected || submitting}
-              onClick={handleVote}
-              className="bg-white text-black px-6 py-3 rounded-md text-sm font-bold flex items-center gap-3 transition-all duration-150 active:scale-95 disabled:opacity-30 disabled:cursor-not-allowed disabled:active:scale-100 shrink-0"
-            >
-              {submitting ? (
-                <>
-                  <div className="inline-block animate-spin rounded-full h-4 w-4 border-2 border-black border-t-transparent"></div>
-                  <span>送信中...</span>
-                </>
-              ) : (
-                <>
-                  <span>投票する</span>
-                  <svg className="w-4 h-4 stroke-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M14 5l7 7m0 0l-7 7m7-7H3"/>
-                  </svg>
-                </>
-              )}
-            </button>
+            <p className="text-[10px] text-gray-400 text-center mt-2 tracking-tight">
+              投票内容の確認画面は、投票するボタンを押した後に表示されます。
+            </p>
           </div>
-
-          <p className="text-[10px] text-gray-400 text-center mt-2 tracking-tight">
-            投票内容の確認画面は、投票するボタンを押した後に表示されます。
-          </p>
         </div>
-      </div>)}
+      )}
     </div>
   );
 }

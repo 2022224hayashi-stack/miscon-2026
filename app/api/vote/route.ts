@@ -1,34 +1,66 @@
-import { NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { NextResponse, NextRequest } from 'next/server';
+import { supabase } from '../../lib/supabase';
 
-// 環境変数がない場合のフォールバックを設定して string 型を確定させる
-const supabaseUrl = process.env.SUPABASE_URL || '';
-const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
+export const dynamic = 'force-dynamic';
 
-const supabase = createClient(supabaseUrl, supabaseServiceKey);
+interface VoteRequestBody {
+  candidateId?: number;
+}
 
-export async function POST(req: Request) {
+export async function POST(req: NextRequest) {
   try {
-    const { candidateId } = await req.json();
+    // ★ 1. ボタンが押された「この瞬間」の DB 設定を取得（キャッシュなし）
+    const { data: settingData, error: settingError } = await supabase
+      .from('settings')
+      .select('value')
+      .eq('key', 'is_voting_open')
+      .single();
 
-    if (!candidateId) {
-      return NextResponse.json({ error: '候補者IDが指定されていません。' }, { status: 400 });
+    if (settingError) {
+      return NextResponse.json({ error: 'DB設定の取得に失敗しました。' }, { status: 500 });
     }
 
-    // Supabaseへの書き込み処理
-    const { error } = await supabase
-      .from('vort') // ※テーブル名が 'vote' や 'votes' のタイポでないか確認してください
+    const isVotingOpen = settingData?.value ?? true;
+
+    // もし DB 上で投票が停止されていた場合
+    if (!isVotingOpen) {
+      return NextResponse.json(
+        { 
+          error: '現在、投票は受付停止中または終了しています。',
+          isVotingOpen: false // フロントエンドでステータス更新に利用
+        },
+        { status: 400 }
+      );
+    }
+
+    // ★ 2. Cookie / LocalStorage 重複チェック（念のためサーバー側でも）
+    const hasVotedCookie = req.cookies.get('has_voted_2026');
+    if (hasVotedCookie) {
+      return NextResponse.json(
+        { error: 'すでにご投票済みです。投票はお一人様1回までとなります。' },
+        { status: 400 }
+      );
+    }
+
+    const body = (await req.json()) as VoteRequestBody;
+    const { candidateId } = body;
+
+    if (typeof candidateId !== 'number' || Number.isNaN(candidateId)) {
+      return NextResponse.json({ error: '有効な候補者IDが指定されていません。' }, { status: 400 });
+    }
+
+    // ★ 3. 投票を DB に保存
+    const { error: insertError } = await supabase
+      .from('vote')
       .insert([{ id_num: candidateId }]);
 
-    if (error) {
-      console.error('[API LOG] Insert Error:', error);
-      return NextResponse.json({ error: `【DBエラー】${error.message}` }, { status: 500 });
+    if (insertError) {
+      return NextResponse.json({ error: `【DBエラー】${insertError.message}` }, { status: 500 });
     }
 
     return NextResponse.json({ success: true }, { status: 200 });
+
   } catch (err: unknown) {
-    console.error('[API LOG] Unexpected Error:', err);
-    // err が Error オブジェクトかどうかを安全に判定
     const errorMessage = err instanceof Error ? err.message : String(err);
     return NextResponse.json({ error: `【サーバーエラー】${errorMessage}` }, { status: 500 });
   }
