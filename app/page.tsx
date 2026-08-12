@@ -254,7 +254,7 @@ export default function VotePage() {
         )}
 
         {!loading && !error && candidates.length > 0 && (
-          <div className="grid grid-cols-3 gap-3.5 mt-4">
+          <div className="grid grid-cols-2 gap-3.5 mt-4">
             {candidates.map((c) => {
               const isSelected = selected?.id === c.id;
               const formattedId = String(c.id).padStart(2, '0');
