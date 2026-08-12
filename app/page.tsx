@@ -16,6 +16,8 @@ export default function VotePage() {
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState<boolean>(false);
   const [showMenu, setShowMenu] = useState<boolean>(false); // メニュー開閉用の状態
+  const [adminClicks, setAdminClicks] = useState<Set<string>>(new Set()); // 管理者ページアクセス用クリック追跡
+  const [pressedKeys, setPressedKeys] = useState<Set<string>>(new Set()); // 押されているキーを追跡
 
   useEffect(() => {
     // シークレットモード検出
@@ -36,21 +38,10 @@ export default function VotePage() {
       return;
     }
 
+    // 右クリック禁止
     const handleContextMenu = (e: MouseEvent) => e.preventDefault();
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (
-        e.key === 'F12' ||
-        (e.ctrlKey && e.shiftKey && ['I', 'J', 'C'].includes(e.key)) ||
-        (e.ctrlKey && e.key === 'U') ||
-        (e.metaKey && e.altKey && ['I', 'J', 'C'].includes(e.key))
-      ) {
-        e.preventDefault();
-      }
-    };
 
-    document.addEventListener('contextmenu', handleContextMenu);
-    document.addEventListener('keydown', handleKeyDown);
-
+    // データ取得
     fetch('/api/candidates')
       .then(async (res) => {
         const data = await res.json();
@@ -67,11 +58,88 @@ export default function VotePage() {
         setLoading(false);
       });
 
+    // 管理者ページアクセス用ロジック
+    let clickTimer: NodeJS.Timeout | null = null;
+
+    const handleAdminClick = (area: string) => {
+      // 必要なキーが押されているか確認
+      if (!pressedKeys.has('a') || !pressedKeys.has('s') || !pressedKeys.has('d')) {
+        return; // キーが押されていなければ何もしない
+      }
+
+      const newClicks = new Set(adminClicks);
+      newClicks.add(area);
+      setAdminClicks(newClicks);
+
+      // タイマーをリセット
+      if (clickTimer) clearTimeout(clickTimer);
+
+      // 3つ全てクリックされたかチェック
+      if (newClicks.has('header') && newClicks.has('title') && newClicks.has('description')) {
+        window.location.href = '/admin';
+        return;
+      }
+
+      // 15秒以内に全てクリックされなかったらリセット
+      clickTimer = setTimeout(() => {
+        setAdminClicks(new Set());
+      }, 15000);
+    };
+
+    const handleGlobalClick = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      if (target.closest('[data-admin-area="header"]')) {
+        handleAdminClick('header');
+      } else if (target.closest('[data-admin-area="title"]')) {
+        handleAdminClick('title');
+      } else if (target.closest('[data-admin-area="description"]')) {
+        handleAdminClick('description');
+      }
+    };
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const key = e.key.toLowerCase();
+
+      // A, S, D キーの検出
+      if (['a', 's', 'd'].includes(key)) {
+        const newKeys = new Set(pressedKeys);
+        newKeys.add(key);
+        setPressedKeys(newKeys);
+      }
+
+      // 開発者ツール防止
+      if (
+        e.key === 'F12' ||
+        (e.ctrlKey && e.shiftKey && ['I', 'J', 'C'].includes(e.key)) ||
+        (e.ctrlKey && e.key === 'U') ||
+        (e.metaKey && e.altKey && ['I', 'J', 'C'].includes(e.key))
+      ) {
+        e.preventDefault();
+      }
+    };
+
+    const handleKeyUp = (e: KeyboardEvent) => {
+      const key = e.key.toLowerCase();
+      if (['a', 's', 'd'].includes(key)) {
+        const newKeys = new Set(pressedKeys);
+        newKeys.delete(key);
+        setPressedKeys(newKeys);
+      }
+    };
+
+    document.addEventListener('contextmenu', handleContextMenu);
+    document.addEventListener('keydown', handleKeyDown);
+    document.addEventListener('keyup', handleKeyUp);
+    document.addEventListener('click', handleGlobalClick);
+
     return () => {
       document.removeEventListener('contextmenu', handleContextMenu);
       document.removeEventListener('keydown', handleKeyDown);
+      document.removeEventListener('keyup', handleKeyUp);
+      document.removeEventListener('click', handleGlobalClick);
+      if (clickTimer) clearTimeout(clickTimer);
     };
-  }, []);
+  }, [adminClicks, pressedKeys]);
 
   const isAlreadyVoted = () => {
     const hasCookie = document.cookie.split(';').some(c => c.trim().startsWith('has_voted_2026='));
@@ -128,7 +196,9 @@ export default function VotePage() {
     <div className="bg-[#fcfcfc] text-[#111] antialiased min-h-screen pb-36 select-none">
       <div className="max-w-md mx-auto px-5 pt-6 pb-8">
         <header className="flex justify-between items-center mb-6 relative">
-          <div className="text-[11px] font-bold tracking-widest text-black">JŌHOKU FESTIVAL 85th</div>
+          <div className="text-[11px] font-bold tracking-widest text-black cursor-pointer hover:opacity-75 transition-opacity" data-admin-area="header">
+            JŌHOKU FESTIVAL 85th
+          </div>
           <button 
             onClick={() => setShowMenu(!showMenu)} 
             aria-label="Menu" 
@@ -143,7 +213,7 @@ export default function VotePage() {
           {showMenu && (
             <div className="absolute top-10 right-0 bg-white border border-gray-200 shadow-xl rounded-xl p-2 z-50 w-44">
               <a
-                href="/admin"
+                href="/lie"
                 className="block px-3 py-2 text-xs font-bold text-gray-800 hover:bg-gray-100 rounded-lg"
               >
                 管理者集計ページへ
@@ -153,11 +223,19 @@ export default function VotePage() {
         </header>
 
         <div className="mb-6">
-          <h1 className="text-[38px] font-black leading-[1.05] tracking-tight text-black">
+          <h1 
+            className="text-[38px] font-black leading-[1.05] tracking-tight text-black cursor-pointer hover:opacity-75 transition-opacity select-none"
+            data-admin-area="title"
+          >
             MISS JŌHOKU<br />2026
           </h1>
           <div className="w-7 h-[2px] bg-black my-4"></div>
-          <p className="text-[13px] font-bold text-black tracking-tight">あなたが応援したい人を１名選んでください</p>
+          <p 
+            className="text-[13px] font-bold text-black tracking-tight cursor-pointer hover:opacity-75 transition-opacity"
+            data-admin-area="description"
+          >
+            あなたが応援したい人を１名選んでください
+          </p>
           <p className="text-[11px] text-gray-500 mt-0.5">※投票はお一人様1回までです</p>
         </div>
 

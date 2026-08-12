@@ -1,14 +1,22 @@
-import { NextResponse } from 'next/server';
+import { NextResponse, NextRequest } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 
 const supabaseUrl = process.env.SUPABASE_URL || '';
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
 const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
-export async function POST() {
-  // 開発環境（このパソコン）以外からのアクセスを完全に拒否
-  if (process.env.NODE_ENV !== 'development') {
-    return NextResponse.json({ error: 'この機能は開発環境（このパソコン）からのみ利用できます。' }, { status: 403 });
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || '';
+
+interface RequestBody {
+  password?: string;
+}
+
+export async function POST(request: NextRequest) {
+  const body = (await request.json()) as RequestBody;
+
+  // パスワード検証
+  if (!body.password || body.password !== ADMIN_PASSWORD) {
+    return NextResponse.json({ error: 'パスワードが正しくありません。' }, { status: 403 });
   }
 
   try {
