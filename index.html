@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MISS JŌHOKU 2026</title>
+  <!-- Tailwind CSS (CDN) -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Supabase JS SDK (v2) -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <style>
+    /* 選択時の右上チェックマーク付き三角リボン */
+    .ribbon {
+      position: absolute;
+      top: 0;
+      right: 0;
+      width: 0;
+      height: 0;
+      border-style: solid;
+      border-width: 0 44px 44px 0;
+      border-color: transparent #000 transparent transparent;
+      z-index: 10;
+    }
+    .ribbon::after {
+      content: '✓';
+      position: absolute;
+      top: 3px;
+      right: -40px;
+      color: #fff;
+      font-size: 14px;
+      font-weight: bold;
+    }
+  </style>
+</head>
+<body class="bg-[#fcfcfc] text-[#111] antialiased selection:bg-black selection:text-white pb-36">
+
+  <div class="max-w-md mx-auto px-5 pt-6 pb-8">
+    <!-- ヘッダー -->
+    <header class="flex justify-between items-center mb-6">
+      <div class="text-[11px] font-bold tracking-widest text-black">JŌHOKU FESTIVAL 85th</div>
+      <!-- ハンバーガーアイコン -->
+      <button aria-label="Menu" class="p-1 focus:outline-none">
+        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M4 7h16M4 12h16M4 17h16"/>
+        </svg>
+      </button>
+    </header>
+
+    <!-- メインタイトルエリア -->
+    <div class="mb-6">
+      <h1 class="text-[38px] font-black leading-[1.05] tracking-tight text-black">
+        MISS JŌHOKU<br>2026
+      </h1>
+      <div class="w-7 h-[2px] bg-black my-4"></div>
+      <p class="text-[13px] font-bold text-black tracking-tight">あなたが応援したい人を１名選んでください</p>
+      <p class="text-[11px] text-gray-500 mt-0.5">※投票はお一人様1回までです</p>
+    </div>
+
+    <!-- 候補者グリッド（JavaScriptでSupabaseから取得して描画） -->
+    <div id="candidateGrid" class="grid grid-cols-2 gap-3.5 mt-4">
+      <!-- 読み込み中のスケルトン表示 -->
+      <div class="col-span-2 py-16 text-center">
+        <div class="inline-block animate-spin rounded-full h-8 w-8 border-2 border-black border-t-transparent mb-2"></div>
+        <p class="text-xs font-bold text-gray-400">候補者データを読み込み中...</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- 下部固定ボトムバー -->
+  <div class="fixed bottom-0 left-0 w-full bg-black text-white px-5 pt-4 pb-5 shadow-2xl z-50">
+    <div class="max-w-md mx-auto">
+      <div class="flex justify-between items-end border-b border-gray-800 pb-3">
+        <!-- 選択中の表示 -->
+        <div class="pr-2">
+          <div class="text-[10px] text-gray-400 tracking-wider font-medium">現在の選択中</div>
+          <div id="bottomSelectedText" class="text-lg font-bold mt-0.5 tracking-tight flex items-center gap-2">
+            <span class="text-2xl font-black" id="bottomSelectedId">01</span>
+            <span class="text-sm font-bold truncate max-w-[120px]" id="bottomSelectedName">候補者名</span>
+          </div>
+        </div>
+
+        <!-- 投票ボタン -->
+        <button id="submitBtn" disabled onclick="sendVote()" class="bg-white text-black px-6 py-3 rounded-md text-sm font-bold flex items-center gap-3 transition-all duration-150 active:scale-95 disabled:opacity-30 disabled:cursor-not-allowed disabled:active:scale-100 shrink-0">
+          <span>投票する</span>
+          <svg class="w-4 h-4 stroke-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M14 5l7 7m0 0l-7 7m7-7H3"/>
+          </svg>
+        </button>
+      </div>
+
+      <!-- 画面下部注記 -->
+      <p class="text-[10px] text-gray-400 text-center mt-2 tracking-tight">
+        投票内容の確認画面は、投票するボタンを押した後に表示されます。
+      </p>
+    </div>
+  </div>
+
+  <script>
+    // ==========================================
+    // 1. Supabase 設定
+    // ==========================================
+    const SUPABASE_URL = 'https://cstzlupgqomqwjajorli.supabase.co';
+    const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNzdHpsdXBncW9tcXdqYWpvcmxpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODY1MjczNDAsImV4cCI6MjEwMjEwMzM0MH0.WlNG8n5BrT4PHrg02grbALv1LLd9C8JWwh1riKZ5lho';
+    const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+    let selectedCandidate = null;
+
+    // 初期化：下部選択中バーのデフォルト非表示状態設定
+    document.getElementById('bottomSelectedText').style.display = 'none';
+
+    // 2. ページ読み込み時に profiles テーブルから候補者取得
+    window.addEventListener('DOMContentLoaded', async () => {
+      try {
+        const { data: profiles, error } = await supabase
+          .from('profiles')
+          .select('id, name, school_year, img')
+          .order('id', { ascending: true });
+
+        if (error) throw error;
+
+        if (!profiles || profiles.length === 0) {
+          document.getElementById('candidateGrid').innerHTML = `
+            <p class="col-span-2 text-center text-xs text-gray-400 py-10">候補者が登録されていません。</p>
+          `;
+          return;
+        }
+
+        renderCandidates(profiles);
+      } catch (err) {
+        console.error('データ取得失敗:', err);
+        document.getElementById('candidateGrid').innerHTML = `
+          <div class="col-span-2 text-center text-xs text-red-500 py-10">
+            データの読み込みに失敗しました。<br>Supabaseの接続情報またはRLS設定を確認してください。
+          </div>
+        `;
+      }
+    });
+
+    // 3. 候補者カード一覧の動的描画
+    function renderCandidates(candidates) {
+      const grid = document.getElementById('candidateGrid');
+      grid.innerHTML = '';
+
+      candidates.forEach((c) => {
+        const formattedId = String(c.id).padStart(2, '0');
+        // 画像が設定されていない場合または人型アイコン風SVGプレースホルダー
+        const hasImg = Boolean(c.img && c.img.trim() !== '');
+
+        const card = document.createElement('div');
+        card.className = `card relative bg-[#f4f4f4] border-2 border-transparent rounded-xl overflow-hidden cursor-pointer transition-all duration-150 select-none`;
+        card.onclick = () => selectCard(card, c.id, formattedId, c.name);
+
+        card.innerHTML = `
+          <!-- 右上リボン -->
+          <div class="ribbon hidden"></div>
+
+          <!-- アバター / 画像領域 -->
+          <div class="w-full h-44 bg-[#e5e5e5] relative flex items-end justify-center overflow-hidden">
+            ${hasImg 
+              ? `<img src="${c.img}" class="w-full h-full object-cover object-top" alt="${c.name}">`
+              : `<div class="w-24 h-28 bg-[#ccc] rounded-t-full relative flex justify-center">
+                   <div class="w-14 h-14 bg-[#ccc] rounded-full -top-9 absolute"></div>
+                 </div>`
+            }
+          </div>
+
+          <!-- カードフッター -->
+          <div class="p-3 bg-white flex justify-between items-center border-t border-gray-100">
+            <div class="flex items-baseline gap-2 min-w-0">
+              <span class="text-xl font-black text-black leading-none">${formattedId}</span>
+              <span class="text-[12px] font-bold text-black truncate">${c.name}</span>
+            </div>
+            <div class="text-[10px] text-gray-600 font-bold flex items-center gap-1 shrink-0 ml-1">
+              <span class="status-circle w-3.5 h-3.5 rounded-full border border-gray-400 flex items-center justify-center text-[8px]"></span>
+              <span class="status-text">選択する</span>
+            </div>
+          </div>
+        `;
+
+        grid.appendChild(card);
+      });
+    }
+
+    // 4. カード選択処理（インタラクション）
+    function selectCard(cardElement, rawId, formattedId, name) {
+      // すべてのカードの選択スタイル解除
+      document.querySelectorAll('.card').forEach(c => {
+        c.classList.remove('border-black', 'bg-white', 'shadow-lg');
+        c.classList.add('border-transparent', 'bg-[#f4f4f4]');
+        c.querySelector('.ribbon').classList.add('hidden');
+        
+        const circle = c.querySelector('.status-circle');
+        circle.className = 'status-circle w-3.5 h-3.5 rounded-full border border-gray-400 flex items-center justify-center text-[8px] bg-transparent text-transparent';
+        circle.textContent = '';
+        
+        c.querySelector('.status-text').textContent = '選択する';
+      });
+
+      // 選択されたカードへスタイル適用
+      cardElement.classList.remove('border-transparent', 'bg-[#f4f4f4]');
+      cardElement.classList.add('border-black', 'bg-white', 'shadow-lg');
+      cardElement.querySelector('.ribbon').classList.remove('hidden');
+
+      const activeCircle = cardElement.querySelector('.status-circle');
+      activeCircle.className = 'status-circle w-3.5 h-3.5 rounded-full bg-black text-white flex items-center justify-center text-[8px] font-bold';
+      activeCircle.textContent = '✓';
+
+      cardElement.querySelector('.status-text').textContent = '選択中';
+
+      // 状態保持 & 下部固定バー更新
+      selectedCandidate = { id: rawId, formattedId, name };
+      
+      document.getElementById('bottomSelectedId').textContent = formattedId;
+      document.getElementById('bottomSelectedName').textContent = name;
+      document.getElementById('bottomSelectedText').style.display = 'flex';
+      
+      const submitBtn = document.getElementById('submitBtn');
+      submitBtn.disabled = false;
+    }
+
+    // 5. 投票処理 (vort テーブルへの INSERT)
+    async function sendVote() {
+      if (!selectedCandidate) return;
+
+      // ブラウザ重複投票チェック
+      if (localStorage.getItem('has_voted_2026')) {
+        alert('すでにご投票済みです。投票はお一人様1回までとなります。');
+        return;
+      }
+
+      const btn = document.getElementById('submitBtn');
+      btn.disabled = true;
+      btn.innerHTML = `
+        <div class="inline-block animate-spin rounded-full h-4 w-4 border-2 border-black border-t-transparent"></div>
+        <span>送信中...</span>
+      `;
+
+      try {
+        // vort テーブルへ挿入
+        const { error } = await supabase
+          .from('vort')
+          .insert([{ id_num: selectedCandidate.id }]);
+
+        if (error) throw error;
+
+        // 重複防止用フラグ保存
+        localStorage.setItem('has_voted_2026', 'true');
+
+        alert(`【${selectedCandidate.formattedId}${selectedCandidate.name}】様への投票が完了しました！\nご参加ありがとうございました。`);
+        location.reload();
+
+      } catch (err) {
+        console.error('投票エラー:', err);
+        alert('投票処理に失敗しました。時間をおいて再度お試しください。');
+        btn.disabled = false;
+        btn.innerHTML = `
+          <span>投票する</span>
+          <svg class="w-4 h-4 stroke-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M14 5l7 7m0 0l-7 7m7-7H3"/>
+          </svg>
+        `;
+      }
+    }
+  </script>
+</body>
+</html>
