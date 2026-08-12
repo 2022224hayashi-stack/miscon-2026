@@ -15,8 +15,27 @@ export default function VotePage() {
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState<boolean>(false);
+  const [showMenu, setShowMenu] = useState<boolean>(false); // メニュー開閉用の状態
 
   useEffect(() => {
+    // シークレットモード検出
+    const isIncognito = () => {
+      try {
+        const test = '__test__';
+        localStorage.setItem(test, test);
+        localStorage.removeItem(test);
+        return false;
+      } catch {
+        return true;
+      }
+    };
+
+    if (isIncognito()) {
+      setError('シークレットモード/プライベートブラウジングでのアクセスはできません。');
+      setLoading(false);
+      return;
+    }
+
     const handleContextMenu = (e: MouseEvent) => e.preventDefault();
     const handleKeyDown = (e: KeyboardEvent) => {
       if (
@@ -56,7 +75,19 @@ export default function VotePage() {
 
   const isAlreadyVoted = () => {
     const hasCookie = document.cookie.split(';').some(c => c.trim().startsWith('has_voted_2026='));
-    const hasLocalStorage = localStorage.getItem('has_voted_2026') === 'true';
+    
+    const localStorageData = localStorage.getItem('has_voted_2026');
+    let hasLocalStorage = false;
+    if (localStorageData) {
+      try {
+        const data = JSON.parse(localStorageData);
+        const oneHourInMs = 60 * 60 * 1000; // 1時間
+        hasLocalStorage = Date.now() - data.timestamp < oneHourInMs;
+      } catch {
+        hasLocalStorage = false;
+      }
+    }
+    
     return hasCookie || hasLocalStorage;
   };
 
@@ -81,7 +112,7 @@ export default function VotePage() {
       if (!res.ok) throw new Error(result.error || '投票処理に失敗しました。');
 
       document.cookie = "has_voted_2026=true; max-age=31536000; path=/; SameSite=Lax";
-      localStorage.setItem('has_voted_2026', 'true');
+      localStorage.setItem('has_voted_2026', JSON.stringify({ voted: true, timestamp: Date.now() }));
 
       const formattedId = String(selected.id).padStart(2, '0');
       alert(`【${formattedId} ${selected.name}】様への投票が完了しました！\nご参加ありがとうございました。`);
@@ -96,13 +127,29 @@ export default function VotePage() {
   return (
     <div className="bg-[#fcfcfc] text-[#111] antialiased min-h-screen pb-36 select-none">
       <div className="max-w-md mx-auto px-5 pt-6 pb-8">
-        <header className="flex justify-between items-center mb-6">
+        <header className="flex justify-between items-center mb-6 relative">
           <div className="text-[11px] font-bold tracking-widest text-black">JŌHOKU FESTIVAL 85th</div>
-          <button aria-label="Menu" className="p-1 focus:outline-none">
+          <button 
+            onClick={() => setShowMenu(!showMenu)} 
+            aria-label="Menu" 
+            className="p-1 focus:outline-none"
+          >
             <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.8" d="M4 7h16M4 12h16M4 17h16"/>
             </svg>
           </button>
+
+          {/* 三本線を押したときに表示されるメニュー */}
+          {showMenu && (
+            <div className="absolute top-10 right-0 bg-white border border-gray-200 shadow-xl rounded-xl p-2 z-50 w-44">
+              <a
+                href="/admin"
+                className="block px-3 py-2 text-xs font-bold text-gray-800 hover:bg-gray-100 rounded-lg"
+              >
+                管理者集計ページへ
+              </a>
+            </div>
+          )}
         </header>
 
         <div className="mb-6">
@@ -135,7 +182,7 @@ export default function VotePage() {
         )}
 
         {!loading && !error && candidates.length > 0 && (
-          <div className="grid grid-cols-2 gap-3.5 mt-4">
+          <div className="grid grid-cols-3 gap-3.5 mt-4">
             {candidates.map((c) => {
               const isSelected = selected?.id === c.id;
               const formattedId = String(c.id).padStart(2, '0');
@@ -143,7 +190,7 @@ export default function VotePage() {
               return (
                 <div
                   key={c.id}
-                  onClick={() => setSelected(c)}
+                  onClick={() => setSelected(isSelected ? null : c)}
                   className={`relative border-2 rounded-xl overflow-hidden cursor-pointer transition-all duration-150 ${
                     isSelected ? 'border-black bg-white shadow-lg' : 'border-transparent bg-[#f4f4f4]'
                   }`}
@@ -168,16 +215,7 @@ export default function VotePage() {
                     <div className="flex items-baseline gap-2 min-w-0">
                       <span className="text-xl font-black text-black leading-none">{formattedId}</span>
                       <span className="text-[12px] font-bold text-black truncate">{c.name}</span>
-                    </div>
-                    <div className="text-[10px] text-gray-600 font-bold flex items-center gap-1 shrink-0 ml-1">
-                      <span
-                        className={`w-3.5 h-3.5 rounded-full flex items-center justify-center text-[8px] ${
-                          isSelected ? 'bg-black text-white font-bold' : 'border border-gray-400 bg-transparent text-transparent'
-                        }`}
-                      >
-                        {isSelected ? '✓' : ''}
-                      </span>
-                      <span>{isSelected ? '選択中' : '選択する'}</span>
+                      <span className="text-[12px] font-bold text-slate-600 truncate">{c.school_year}</span>
                     </div>
                   </div>
                 </div>
@@ -186,7 +224,8 @@ export default function VotePage() {
           </div>
         )}
       </div>
-
+      
+      {selected && (
       <div className="fixed bottom-0 left-0 w-full bg-black text-white px-5 pt-4 pb-5 shadow-2xl z-50">
         <div className="max-w-md mx-auto">
           <div className="flex justify-between items-end border-b border-gray-800 pb-3">
@@ -225,7 +264,7 @@ export default function VotePage() {
             投票内容の確認画面は、投票するボタンを押した後に表示されます。
           </p>
         </div>
-      </div>
+      </div>)}
     </div>
   );
 }
